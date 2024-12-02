@@ -2,88 +2,75 @@
 #include <stdint.h>
 #include <math.h>   // for M_PI
 
-//void internal_clock();
 
-void internal_clock()
-{
-    /* Disable HSE to allow use of the GPIOs */
-    RCC->CR &= ~RCC_CR_HSEON;
+//TO-DO
+//* determine how long one rotation takes for different duty cycles so we can adjust the code
+//* make sure we can remove the UART code
+//* simplify code for turning off GPIOs into one line of code
+//* change from 0.2s to a smaller time
 
-    /* Enable Prefetch Buffer and set Flash Latency */
-    FLASH->ACR = FLASH_ACR_PRFTBE | FLASH_ACR_LATENCY;
+float duty =  0.75 ; 
 
-    /* HCLK = SYSCLK */
-    RCC->CFGR |= (uint32_t)RCC_CFGR_HPRE_DIV1;
 
-    /* PCLK = HCLK */
-    RCC->CFGR |= (uint32_t)RCC_CFGR_PPRE_DIV1;
-
-    /* PLL configuration = (HSI/2) * 12 = ~48 MHz */
-    RCC->CFGR &= (uint32_t)((uint32_t)~(RCC_CFGR_PLLSRC | RCC_CFGR_PLLXTPRE | RCC_CFGR_PLLMULL));
-    RCC->CFGR |= (uint32_t)(RCC_CFGR_PLLSRC_HSI_Div2 | RCC_CFGR_PLLXTPRE_PREDIV1 | RCC_CFGR_PLLMULL12);
-
-    /* Enable PLL */
-    RCC->CR |= RCC_CR_PLLON;
-
-    /* Wait till PLL is ready */
-    while((RCC->CR & RCC_CR_PLLRDY) == 0)
-    {
-    }
-
-    /* Select PLL as system clock source */
-    RCC->CFGR &= (uint32_t)((uint32_t)~(RCC_CFGR_SW));
-    RCC->CFGR |= (uint32_t)RCC_CFGR_SW_PLL;
-
-    /* Wait till PLL is used as system clock source */
-    while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS) != (uint32_t)RCC_CFGR_SWS_PLL)
-    {
-    }
-}
+void internal_clock();
+void search_for_flag(char *) ; 
+void setup_tim3() ; 
+void stop_pwm() ; 
+void nano_wait(int);
 
 void input_gpio(){
 
     RCC -> AHBENR |= RCC_AHBENR_GPIOBEN;
     GPIOB -> MODER &= ~0xf000; //clears PB6 PB7, set to input mode
+    GPIOB -> PUPDR &= ~0xc003; //sets PUPDR to 0 for PB0, PB6, PB7
+    GPIOB -> PUPDR = (1 << 15) | (1 << 13) | (1 << 1);
     
 }
 
-void init_usart5() {
+void search_for_flag(char * searched){
+    duty = 0.75; 
+    int flag_found = 0;
+    int rotation_time = 1; //1 second rotation increment
+    int total_rotation_time = 5; //5 seconds for a full 360-degree search routine
+    //we might have to change total_rotation_time because i am not sure what makes it 360 degrees
 
-    RCC -> AHBENR |= RCC_AHBENR_GPIOCEN;
-    RCC -> AHBENR |= RCC_AHBENR_GPIODEN;
+    for (int elapsed_time = 0; elapsed_time < total_rotation_time; elapsed_time += rotation_time)
+    {
+        //start a right turn
+        GPIOB -> BSRR = (1 << 8);
+        GPIOB -> BSRR = (1 << 25);
+        GPIOB -> BSRR = (1 << 26);
+        GPIOB -> BSRR = (1 << 11);
 
-    //configure pin PC12 to be routed to USART_TX
-    GPIOC -> MODER &= ~GPIO_MODER_MODER12;
-    GPIOC -> MODER |= GPIO_MODER_MODER12_1;
-    GPIOC -> AFR[1] &= ~0xf0000;
-    GPIOC -> AFR[1] |= 0x20000;
+        setup_tim3(); //enable PWM
+        nano_wait(1000000000); //allows cart to rotate for 1 second
+        stop_pwm(); //stop PWM after each rotation increment
+        
+        //deactivate GPIO signals to turn off motor
+        GPIOB -> BSRR = (1 << 24); 
+        GPIOB -> BSRR = (1 << 25);
+        GPIOB -> BSRR = (1 << 26);
+        GPIOB -> BSRR = (1 << 27);
 
-    //configure pin PD2 to be routed to USART5_RX
-    GPIOD -> MODER &= ~GPIO_MODER_MODER2;
-    GPIOD -> MODER |= GPIO_MODER_MODER2_1;
-    GPIOD -> AFR[0] &= ~0xf00;
-    GPIOD -> AFR[0] |= 0x200;
+        nano_wait(1000000000); 
+        flag_found = ((GPIOB -> IDR) & 1); //checks if the signal is high from PB0 (assuming high means nothing is detected)
 
-    RCC -> APB1ENR |= RCC_APB1ENR_USART5EN;
-    USART5 -> CR1 &= ~USART_CR1_UE; //disable UART
-    USART5 -> CR1 &= ~USART_CR1_M1; //set word length to 8 bits
-    USART5 -> CR1 &= ~USART_CR1_M0;
-    USART5 -> CR2 &= ~USART_CR2_STOP; //set for one stop bit
-    USART5 -> CR1 &= ~USART_CR1_PCE; //set for no parity control
-    USART5 -> CR1 &= ~USART_CR1_OVER8; //oversampling by 16
+        if (flag_found)
+        {
+            duty = 0.75 ; 
+            return; //exit loop if the flag is found
+        }
+    }
 
-    USART5 -> BRR = 0x1A1; //set baud rate
-
-    USART5 -> CR1 |= USART_CR1_RE; //enable receiver    
-    USART5 -> CR1 |= USART_CR1_TE; //enable transmitter
-
-    USART5 -> CR1 |= USART_CR1_UE; //enable the USART
-
-    while(!(USART5 -> ISR & USART_ISR_TEACK)); //waits for TE bit to be acknowledged
-    while(!(USART5 -> ISR & USART_ISR_REACK)); //waits for RE bit to be acknowledged
+    //stops the cart if the flag is not found after search routine is finished
+    if (!flag_found){
+        *searched = 'T' ; 
+        GPIOB -> BSRR = (1 << 24) | (1 << 25) | (1 << 26) | (1 << 27); //set GPIO to 0 to stop motor
+    }
+    duty = 0.75 ; 
 }
 
-void nano_wait(int);
+
 
 void setup_tim3(void) {
     RCC -> APB1ENR |= RCC_APB1ENR_TIM3EN; //enable the clock for the TIM3 peripheral
@@ -99,8 +86,8 @@ void setup_tim3(void) {
     int arr = 12 - 1;
     TIM3 -> ARR = arr; 
     
-    float duty_cycle1 = 50.0 / 100.0; //type in desired duty cycle
-    float duty_cycle2 = 50.0 / 100.0;
+    // float duty_cycle1 = 70.0 / 100.0; //type in desired duty cycle
+    // float duty_cycle2 = 70.0 / 100.0;
 
     TIM3 -> CCMR1 &= ~0x7070;
     TIM3 -> CCMR1 |= 0x6060;
@@ -110,8 +97,8 @@ void setup_tim3(void) {
 
     TIM3 -> CR1 |= TIM_CR1_CEN; //enable the timer
 
-    float ccr1 = (duty_cycle1 * (arr)); //do I need to add (arr + 1)
-    float ccr2 = (duty_cycle2 * (arr));
+    float ccr1 = (duty * (arr)); //do I need to add (arr + 1)
+    float ccr2 = (duty * (arr));
 
     TIM3 -> CCR1 = (ccr1 + 1); //change these values to increase / decrease the duty cycle
     TIM3 -> CCR2 = (ccr2 + 1);
@@ -128,23 +115,26 @@ void init_gpio(){ //initialize PB8-PB11
 
     GPIOB -> MODER  &= ~0x3f; //clears PB0-2
     GPIOB -> MODER |= 0x14; //sets PB1, PB2 to output
+
+    //sets pull down resistors
+    GPIOB -> PUPDR &= ~0xc003; //sets PUPDR to 0 for PB0, PB6, PB7
+    // GPIOB -> PUPDR = (1 << 15) | (1 << 13) | (1 << 1);
 }
 
 int main(void){
     internal_clock();
-    init_usart5();
-    //setup_tim3();
     init_gpio();
     stop_pwm();
+    char searched = 'F' ; 
+    int notFoundCount = 0 ;
     int dir = 0 ;
-
-    int input = 0;
-
-    //RECEIVE GPIO INPUT SIGNALS
+    //TURN OFF ALL GPIOS TO STOP MOTOR
     GPIOB -> BSRR = (1 << 24); 
     GPIOB -> BSRR = (1 << 25);
     GPIOB -> BSRR = (1 << 26);
     GPIOB -> BSRR = (1 << 27);
+
+    //WAIT 5 SECONDS BEFORE ALLOWING THE CART TO MOVE
     nano_wait(1000000000);
     nano_wait(1000000000);
     nano_wait(1000000000);
@@ -153,75 +143,98 @@ int main(void){
 
 
     stop_pwm();
-    for(;;) {
-        dir = ((GPIOB -> IDR) >> 6) & (3) ; 
 
+    while (1){
 
-//  NEW SECTION
-        input = ((GPIOB -> IDR) & 1);    
-
-        if (input == 1)
-        {//PB1
-            GPIOB -> BSRR = (1 << 1); //turns on PB1 if input is high
-        }
-
-        if (input == 0)
-        {//PB2
-            GPIOB -> BSRR = (1 << 2); //turns on if PB2 input is low
-        }
-
-//  NEW SECTION
-
-        //move forward
-        if (dir == 3)
-        { 
-            GPIOB -> BSRR = (1 << 8); //output for PB8 left wheel(sets 1)
-            GPIOB -> BSRR = (1 << 25); //output for PB9 left wheel (sets 0)
-
-            GPIOB -> BSRR = (1 << 10); //output for PB10 right wheel (sets 1)
-            GPIOB -> BSRR = (1 << 27);//output for PB11 right wheel (sets 0);
-            USART5 -> TDR = 'f';
-            setup_tim3(); //set up the PWM
-        }
-
-        //move right
-        else if (dir == 2)
+        /**************************************** */
+        //CHECK BELOW LINE WITH SAM!!!!!!!!!!!!!
+        //ideally, sending a 1 will mean that we see the flag
+        //************************************ */
+        
+        int flag_detected = (GPIOB -> IDR) & 1; //check input flag status (assumes high if flag is detected) 
+        if (!flag_detected)
         {
-            //move left wheel forward
-            GPIOB -> BSRR = (1 << 8); //output for PB8 left wheel(sets 1)
-            GPIOB -> BSRR = (1 << 25); //output for PB9 left wheel (sets 0)
-
-            //move right wheel backward
-            GPIOB -> BSRR = (1 << 26); //output for PB10 right wheel (sets 0)
-            GPIOB -> BSRR = (1 << 11); //output for PB11 right wheel (sets 1)
-            USART5 -> TDR = 'r';
-            setup_tim3(); //set up the PWM
+            notFoundCount += 200 ;
+            if (notFoundCount >= 10000) notFoundCount = 10000 ; 
+            if ((notFoundCount >= 10000) && searched == 'F') search_for_flag(&searched);
+            nano_wait(200000000);
         }
 
-        //move left
-        else if (dir == 1)
+        else
         {
-            //move left wheel backward
-            GPIOB -> BSRR = (1 << 24); //output for PB8 left wheel (sets 0)
-            GPIOB -> BSRR = (1 << 9); //output for PB9 left wheel (sets 1)
+            notFoundCount = 0 ;
+            searched = 'F' ; 
+            //there used to be a for loop here, but i removed it
+                dir = ((GPIOB -> IDR) >> 6) & (3) ; 
 
-            //move right wheel forward
-            GPIOB -> BSRR = (1 << 10); //output for PB10 right wheel (sets 1)
-            GPIOB -> BSRR = (1 << 27); //output for PB11 right wheel (sets 0)
-            USART5 -> TDR = 'l';
-            setup_tim3(); //set up the PWM
-        }
+                        //testing to see if third GPIO input works correctly
+                        // //  NEW SECTION
+                        //         input = ((GPIOB -> IDR) & 1);    
 
-        //enable PWM for 0.2s, the stop PWM
-        //setup_tim3(); //set up the PWM
-        nano_wait(200000000); //runs the motor for 0.2s
-        //nano_wait(2000000000); //runs the motor for 2s
-        stop_pwm(); //stop motor after 0.2s
+                        //         if (input == 1)
+                        //         {//PB1
+                        //             GPIOB -> BSRR = (1 << 1); //turns on PB1 if input is high
+                        //         }
 
-        //set all directional control GPIOs to 0
-        GPIOB -> BSRR = (1 << 24); 
-        GPIOB -> BSRR = (1 << 25);
-        GPIOB -> BSRR = (1 << 26);
-        GPIOB -> BSRR = (1 << 27);
+                        //         if (input == 0)
+                        //         {//PB2
+                        //             GPIOB -> BSRR = (1 << 2); //turns on if PB2 input is low
+                        //         }
+
+                        // //  NEW SECTION
+
+                //move forward
+                if (dir == 3) //11 for forward
+                { 
+                    GPIOB -> BSRR = (1 << 8); //output for PB8 left wheel(sets 1)
+                    GPIOB -> BSRR = (1 << 25); //output for PB9 left wheel (sets 0)
+
+                    GPIOB -> BSRR = (1 << 10); //output for PB10 right wheel (sets 1)
+                    GPIOB -> BSRR = (1 << 27);//output for PB11 right wheel (sets 0);
+                    //USART5 -> TDR = 'f';
+                    setup_tim3(); //set up the PWM
+                }
+
+                //move right
+                else if (dir == 2) //11 for right
+                {
+                    //move left wheel forward
+                    GPIOB -> BSRR = (1 << 8); //output for PB8 left wheel(sets 1)
+                    GPIOB -> BSRR = (1 << 25); //output for PB9 left wheel (sets 0)
+
+                    //move right wheel backward
+                    GPIOB -> BSRR = (1 << 26); //output for PB10 right wheel (sets 0)
+                    GPIOB -> BSRR = (1 << 11); //output for PB11 right wheel (sets 1)
+                    //USART5 -> TDR = 'r';
+                    setup_tim3(); //set up the PWM
+                }
+
+                //move left
+                else if (dir == 1)  //01 for left
+                {
+                    //move left wheel backward
+                    GPIOB -> BSRR = (1 << 24); //output for PB8 left wheel (sets 0)
+                    GPIOB -> BSRR = (1 << 9); //output for PB9 left wheel (sets 1)
+
+                    //move right wheel forward
+                    GPIOB -> BSRR = (1 << 10); //output for PB10 right wheel (sets 1)
+                    GPIOB -> BSRR = (1 << 27); //output for PB11 right wheel (sets 0)
+                    //USART5 -> TDR = 'l';
+                    setup_tim3(); //set up the PWM
+                }
+
+            //enable PWM for 0.2s, the stop PWM
+            //setup_tim3(); //set up the PWM
+            nano_wait(200000000); //runs the motor for 0.2s
+            //nano_wait(2000000000); //runs the motor for 2s
+            stop_pwm(); //stop motor after 0.2s
+            }
+
+            //set all directional control GPIOs to 0
+            GPIOB -> BSRR = (1 << 24); 
+            GPIOB -> BSRR = (1 << 25);
+            GPIOB -> BSRR = (1 << 26);
+            GPIOB -> BSRR = (1 << 27);
+
+       }
     }
-}
